@@ -1,5 +1,7 @@
 #version 330
-#extension GL_ARB_separate_shader_objects : require
+#extension GL_ARB_separate_shader_objects : enable
+
+#define gl_VertexIndex gl_VertexID
 
 layout(std140) uniform RearOverlayConfig {
     vec4 Rect;

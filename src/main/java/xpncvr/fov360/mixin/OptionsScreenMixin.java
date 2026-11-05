@@ -8,7 +8,7 @@ import net.minecraft.client.gui.layouts.LinearLayout;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.options.OptionsScreen;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -21,7 +21,7 @@ import xpncvr.fov360.Fov360OptionsScreen;
 public abstract class OptionsScreenMixin extends Screen {
 
 	@Unique
-	private static final Identifier FOV360_ICON = Identifier.fromNamespaceAndPath("fov360", "icon/settings");
+	private static final ResourceLocation FOV360_ICON = new ResourceLocation("fov360", "icon/settings");
 
 	@Unique
 	private static final int FOV360_ICON_SIZE = 20;
@@ -60,10 +60,9 @@ public abstract class OptionsScreenMixin extends Screen {
 		}
 		Screen self = this;
 		fov360$settingsButton = addRenderableWidget(SpriteIconButton.builder(Component.translatable("fov360.options.title"),
-				button -> minecraft.gui.setScreen(new Fov360OptionsScreen(self, minecraft.options)), true)
+				button -> minecraft.setScreen(new Fov360OptionsScreen(self, minecraft.options)), true)
 			.width(FOV360_ICON_SIZE)
 			.sprite(FOV360_ICON, 16, 16)
-			.withTootip()
 			.build());
 		fov360$positionSettingsButton();
 	}

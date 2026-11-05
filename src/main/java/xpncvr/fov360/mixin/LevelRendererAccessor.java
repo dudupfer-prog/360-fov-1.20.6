@@ -2,6 +2,7 @@ package xpncvr.fov360.mixin;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import net.minecraft.client.renderer.LevelRenderer;
+import net.minecraft.client.renderer.culling.Frustum;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Mutable;
 import org.spongepowered.asm.mixin.gen.Accessor;
@@ -16,9 +17,10 @@ public interface LevelRendererAccessor {
 	@Accessor("entityOutlineTarget")
 	void panini$setEntityOutlineTarget(RenderTarget target);
 
-	@Accessor("currentFrameRendersEntityOutline")
-	boolean panini$getCurrentFrameRendersEntityOutline();
+	@Accessor("cullFrustum")
+	Frustum panini$getCullFrustum();
 
-	@Accessor("currentFrameRendersEntityOutline")
-	void panini$setCurrentFrameRendersEntityOutline(boolean value);
+	@Mutable
+	@Accessor("cullFrustum")
+	void panini$setCullFrustum(Frustum frustum);
 }

@@ -21,6 +21,6 @@ public abstract class VideoSettingsScreenMixin extends OptionsSubScreen {
 	@Inject(method = "addOptions", at = @At("TAIL"))
 	private void fov360$addSettingsButton(CallbackInfo ci) {
 		list.addBig(Button.builder(Component.translatable("fov360.options.open"),
-			button -> minecraft.gui.setScreen(new Fov360OptionsScreen(this, options))).build());
+			button -> minecraft.setScreen(new Fov360OptionsScreen(this, options))).build());
 	}
 }

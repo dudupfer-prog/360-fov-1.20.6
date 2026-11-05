@@ -1,7 +1,6 @@
 package xpncvr.fov360;
 
-import net.minecraft.ChatFormatting;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.CycleButton;
 import net.minecraft.client.gui.components.MultiLineTextWidget;
@@ -85,9 +84,9 @@ public final class Fov360ProjectionScreen extends Screen {
 	}
 
 	@Override
-	public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+	public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
 		if (!preview || minecraft.level == null) {
-			super.extractBackground(graphics, mouseX, mouseY, partialTick);
+			super.renderBackground(graphics, mouseX, mouseY, partialTick);
 		}
 	}
 
@@ -133,14 +132,14 @@ public final class Fov360ProjectionScreen extends Screen {
 	}
 
 	private void confirmReset() {
-		minecraft.gui.setScreen(new ConfirmScreen(confirmed -> {
+		minecraft.setScreen(new ConfirmScreen(confirmed -> {
 			if (confirmed) {
 				config.projectionPoints.clear();
 				config.projectionPoints.addAll(Fov360Config.defaultProjectionPoints());
 				thresholds.select(0);
 				updateControls();
 			}
-			minecraft.gui.setScreen(this);
+			minecraft.setScreen(this);
 		}, Component.translatable("fov360.thresholds.reset.confirm"), Component.translatable("fov360.reset.warning")));
 	}
 
@@ -151,6 +150,6 @@ public final class Fov360ProjectionScreen extends Screen {
 
 	@Override
 	public void onClose() {
-		minecraft.gui.setScreen(lastScreen);
+		minecraft.setScreen(lastScreen);
 	}
 }

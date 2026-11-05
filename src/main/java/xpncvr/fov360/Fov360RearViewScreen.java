@@ -2,8 +2,7 @@ package xpncvr.fov360;
 
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.OptionInstance;
-import net.minecraft.client.Options;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Tooltip;
@@ -129,17 +128,17 @@ public final class Fov360RearViewScreen extends Screen {
 	}
 
 	@Override
-	public void extractBackground(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+	public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
 		if (minecraft.level == null) {
-			super.extractBackground(graphics, mouseX, mouseY, partialTick);
+			super.renderBackground(graphics, mouseX, mouseY, partialTick);
 		}
 		graphics.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, PANEL_FILL);
-		graphics.outline(panelX, panelY, panelWidth, panelHeight, PANEL_BORDER);
+		graphics.renderOutline(panelX, panelY, panelWidth, panelHeight, PANEL_BORDER);
 		boolean blocked = config.splitScreen;
 		Component hint = blocked
 			? Component.translatable("fov360.rearView.splitWarning").withStyle(ChatFormatting.YELLOW)
 			: Component.translatable("fov360.rearView.hint");
-		graphics.text(font, hint, panelX + (panelWidth - font.width(hint)) / 2, panelY + PADDING,
+		graphics.drawString(font, hint, panelX + (panelWidth - font.width(hint)) / 2, panelY + PADDING,
 			blocked ? WARNING_COLOR : HINT_COLOR, false);
 	}
 
@@ -165,7 +164,7 @@ public final class Fov360RearViewScreen extends Screen {
 
 	@Override
 	public void onClose() {
-		minecraft.gui.setScreen(lastScreen);
+		minecraft.setScreen(lastScreen);
 		if (lastScreen instanceof Fov360OptionsScreen optionsScreen) {
 			optionsScreen.refresh();
 		}

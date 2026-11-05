@@ -17,11 +17,11 @@
 		"fov360.mixins.json"
 	],
 	"depends": {
-		"minecraft": "~26.3",
-		"java": ">=25"
+		"minecraft": "~1.20.6",
+		"java": ">=21"
 	},
     "entrypoints": {
-      "main": [
+      "client": [
         "xpncvr.fov360.Main"
       ]
     }

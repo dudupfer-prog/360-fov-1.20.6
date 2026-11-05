@@ -1,11 +1,11 @@
 package xpncvr.fov360.mixin;
 
 import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
 import net.minecraft.client.renderer.entity.ExperienceOrbRenderer;
-import net.minecraft.client.renderer.entity.state.ExperienceOrbRenderState;
-import net.minecraft.client.renderer.state.level.CameraRenderState;
+import net.minecraft.world.entity.ExperienceOrb;
 import org.joml.Quaternionf;
-import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
@@ -15,12 +15,11 @@ import xpncvr.fov360.Fov360Renderer;
 public abstract class ExperienceOrbRendererMixin {
 
 	@Redirect(
-		method = "submit(Lnet/minecraft/client/renderer/entity/state/ExperienceOrbRenderState;Lcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/SubmitNodeCollector;Lnet/minecraft/client/renderer/state/level/CameraRenderState;)V",
+		method = "render(Lnet/minecraft/world/entity/ExperienceOrb;FFLcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/MultiBufferSource;I)V",
 		at = @At(
-			value = "FIELD",
-			opcode = Opcodes.GETFIELD,
-			target = "Lnet/minecraft/client/renderer/state/level/CameraRenderState;orientation:Lorg/joml/Quaternionf;"))
-	private Quaternionf panini$orbTowardEye(CameraRenderState cameraState, ExperienceOrbRenderState state, PoseStack poseStack) {
-		return Fov360Renderer.billboardOrientation(poseStack, cameraState.orientation, false);
+			value = "INVOKE",
+			target = "Lnet/minecraft/client/renderer/entity/EntityRenderDispatcher;cameraOrientation()Lorg/joml/Quaternionf;"))
+	private Quaternionf panini$orbTowardEye(EntityRenderDispatcher dispatcher, ExperienceOrb entity, float entityYaw, float partialTicks, PoseStack poseStack, MultiBufferSource buffer, int packedLight) {
+		return Fov360Renderer.billboardOrientation(poseStack, dispatcher.cameraOrientation(), false);
 	}
 }

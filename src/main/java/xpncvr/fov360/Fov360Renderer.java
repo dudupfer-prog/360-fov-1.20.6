@@ -1,30 +1,15 @@
 package xpncvr.fov360;
 
-import com.mojang.renderpearl.api.buffers.GpuBuffer;
-import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
-import com.mojang.blaze3d.buffers.Std140Builder;
-import com.mojang.blaze3d.buffers.Std140SizeCalculator;
-import com.mojang.renderpearl.api.GpuFormat;
-import com.mojang.renderpearl.api.pipeline.BindGroupLayout;
-import com.mojang.renderpearl.api.pipeline.ColorTargetState;
-import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.platform.Window;
-import com.mojang.renderpearl.api.pipeline.UniformType;
-import com.mojang.renderpearl.api.commands.CommandEncoder;
-import com.mojang.renderpearl.api.device.GpuDevice;
-import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.renderpearl.api.textures.FilterMode;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
-import net.minecraft.client.renderer.RenderPipelines;
-import net.minecraft.client.renderer.state.GameRenderState;
-import net.minecraft.resources.Identifier;
+import net.minecraft.client.renderer.ScreenEffectRenderer;
 import net.minecraft.util.Mth;
 import net.minecraft.util.profiling.Profiler;
 import net.minecraft.util.profiling.ProfilerFiller;
@@ -35,12 +20,23 @@ import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
+import org.lwjgl.BufferUtils;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL12;
+import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL15;
+import org.lwjgl.opengl.GL20;
+import org.lwjgl.opengl.GL30;
+import org.lwjgl.opengl.GL31;
+import xpncvr.fov360.mixin.CameraMixin;
 import xpncvr.fov360.mixin.GameRendererInvoker;
 import xpncvr.fov360.mixin.LevelRendererAccessor;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.FloatBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.Optional;
-import java.util.OptionalDouble;
 
 public final class Fov360Renderer {
 	public static final Fov360Renderer INSTANCE = new Fov360Renderer();
@@ -138,7 +134,6 @@ public final class Fov360Renderer {
 	public static volatile boolean rearOverlayPreview = false;
 	public static volatile boolean suppressHand = false;
 
-
 	private Fov360Config config = null;
 
 	private final RenderTarget[] faces = new RenderTarget[6];
@@ -190,11 +185,10 @@ public final class Fov360Renderer {
 
 	private final Fov360GuiProjection guiProjection = new Fov360GuiProjection();
 
-	private RenderPipeline pipeline = null;
-	private GpuBuffer uboBuffer = null;
-	private GpuBuffer uboBufferOutline = null;
-	private int uboSize = -1;
-	private GpuDevice resourceDevice = null;
+	private int programId = 0;
+	private int uboBuffer = 0;
+	private int uboBufferOutline = 0;
+	private int emptyVao = 0;
 
 	private RenderTarget savedOutlineTarget = null;
 	private LevelRendererAccessor outlineRedirect = null;
@@ -217,15 +211,13 @@ public final class Fov360Renderer {
 	private RenderTarget rearOutlineTarget = null;
 	private int rearWidth = 0;
 	private int rearHeight = 0;
-	private RenderPipeline overlayPipeline = null;
-	private GpuBuffer uboBufferRear = null;
-	private GpuBuffer uboBufferRearOutline = null;
-	private GpuBuffer overlayUbo = null;
+	private int overlayProgramId = 0;
+	private int uboBufferRear = 0;
+	private int uboBufferRearOutline = 0;
+	private int overlayUbo = 0;
 	private boolean rearValid = false;
 	private float rearCapturedFov = 0.0F;
 	private final float[] overlayUboValues = new float[OVERLAY_UBO_FLOATS];
-	private final float[] overlayUboWritten = new float[OVERLAY_UBO_FLOATS];
-	private boolean overlayUboFresh = false;
 	private long lastRearNanos = 0L;
 	private Object rearLevel = null;
 	private float lastViewPitch = 0.0F;
@@ -236,6 +228,21 @@ public final class Fov360Renderer {
 	private Fov360Projection blendFrom = Fov360Projection.RECTILINEAR;
 	private Fov360Projection blendTo = Fov360Projection.RECTILINEAR;
 	private float blendT = 0.0F;
+
+	private final FloatBuffer uboFloatBuffer = BufferUtils.createFloatBuffer(256);
+	private final FloatBuffer overlayUboFloatBuffer = BufferUtils.createFloatBuffer(16);
+	private final float[] mat4Scratch = new float[16];
+
+	private static final String QUAD_VERT = """
+		#version 330
+		layout(location = 0) out vec2 texCoord;
+		void main() {
+			float x = -1.0 + float((gl_VertexID & 1) << 2);
+			float y = -1.0 + float((gl_VertexID & 2) << 1);
+			gl_Position = vec4(x, y, 0.0, 1.0);
+			texCoord = vec2((x + 1.0) * 0.5, (y + 1.0) * 0.5);
+		}
+		""";
 
 	private Fov360Renderer() {
 		for (int i = 0; i < 6; i++) {
@@ -340,13 +347,12 @@ public final class Fov360Renderer {
 			return target;
 		}
 		Minecraft client = Minecraft.getInstance();
-		GameRenderer gameRenderer = client == null ? null : client.gameRenderer;
-		return gameRenderer == null ? cached : gameRenderer.mainRenderTarget();
+		return client == null ? cached : client.getMainRenderTarget();
 	}
 
-	public static GpuBufferSlice rightHalfGuiProjection(Window window) {
+	public static Matrix4f rightHalfGuiProjection(Window window) {
 		try {
-			return INSTANCE.guiProjection.slice(window);
+			return INSTANCE.guiProjection.matrix(window);
 		} catch (Throwable t) {
 			INSTANCE.fail(t);
 			return null;
@@ -386,6 +392,10 @@ public final class Fov360Renderer {
 		return billboardScratch;
 	}
 
+	public static float captureNear() {
+		return CameraMixin.panini$captureNear();
+	}
+
 	public boolean runFrame(GameRenderer gameRenderer, DeltaTracker deltaTracker) {
 		Minecraft client = Minecraft.getInstance();
 		Player player = client.player;
@@ -404,12 +414,12 @@ public final class Fov360Renderer {
 				return false;
 			}
 
-			float dynamicFov = gameRenderer.mainCamera().getFov();
+			float dynamicFov = (float) ((GameRendererInvoker) gameRenderer).panini$getFov(gameRenderer.getMainCamera(), deltaTracker.getGameTimeDeltaPartialTick(false), false);
 			if (dynamicFov > 0.0F) {
 				rawFov = Mth.clamp(rawFov * dynamicFov / client.options.fov().get(), MIN_ZOOMED_FOV, MAX_SLIDER_FOV);
 			}
 
-			RenderTarget main = gameRenderer.mainRenderTarget();
+			RenderTarget main = client.getMainRenderTarget();
 			int outH = main.height;
 			float projW = main.width / (split ? 2.0F : 1.0F);
 			float aspect = projW / (float) outH;
@@ -420,11 +430,10 @@ public final class Fov360Renderer {
 			computeScales(fovx);
 			selectProjections(split ? baseFov : remapBoundaryFovx(baseFov, aspect));
 
-			Camera realCamera = gameRenderer.mainCamera();
+			Camera realCamera = gameRenderer.getMainCamera();
 			float worldPartialTicks = deltaTracker.getGameTimeDeltaPartialTick(false);
-			float cameraPartialTicks = realCamera.getCameraEntityPartialTicks(deltaTracker);
 
-			updateViewAngles(client, player, cameraPartialTicks);
+			updateViewAngles(client, player, worldPartialTicks);
 			float viewYaw = frameViewYaw;
 			float viewPitch = frameViewPitch;
 			lastViewPitch = viewPitch;
@@ -447,11 +456,8 @@ public final class Fov360Renderer {
 			chooseLayout(split, fovx, viewPitch);
 			ensureResources();
 
-			GameRendererInvoker inv = (GameRendererInvoker) gameRenderer;
-
 			capturing = true;
 			beginOutlineCapture(client);
-			boolean anyOutline = false;
 
 			for (int k = 0; k < 6; k++) {
 				if (!faceEnabled[k]) {
@@ -471,20 +477,20 @@ public final class Fov360Renderer {
 					captureFaceYaw = faceYaw(viewYaw, k);
 					captureFacePitch = facePitch(k);
 					captureUseRotation = false;
+					captureFov = CUBE_FACE_FOV;
+					captureAspect = 1.0F;
+					captureCullFov = CUBE_CULL_FOV;
 				}
 				currentTarget = faces[k];
 				if (outlineRedirect != null) {
-					RenderSystem.getDevice().createCommandEncoder().clearColorTexture(outlineFaces[k].getColorTexture(), CLEAR_OUTLINE);
+					outlineFaces[k].bindWrite(true);
+					RenderSystem.clearColor(0.0F, 0.0F, 0.0F, 0.0F);
+					RenderSystem.clear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT, Minecraft.ON_OSX);
 					outlineRedirect.panini$setEntityOutlineTarget(outlineFaces[k]);
 				}
 
-				realCamera.update(deltaTracker);
-				inv.panini$extractCamera(deltaTracker, worldPartialTicks);
-				client.levelExtractor.extract(deltaTracker, realCamera, worldPartialTicks);
-				gameRenderer.renderLevel();
-				if (outlineRedirect != null) {
-					anyOutline |= outlineRedirect.panini$getCurrentFrameRendersEntityOutline();
-				}
+				realCamera.setup(client.level, client.getCameraEntity() == null ? player : client.getCameraEntity(), !client.options.getCameraType().isFirstPerson(), client.options.getCameraType().isMirrored(), worldPartialTicks);
+				gameRenderer.renderLevel(deltaTracker);
 			}
 
 			currentTarget = null;
@@ -495,17 +501,14 @@ public final class Fov360Renderer {
 			captureCullFov = CUBE_CULL_FOV;
 			endOutlineCapture();
 
-			realCamera.update(deltaTracker);
-			inv.panini$extractCamera(deltaTracker, worldPartialTicks);
+			realCamera.setup(client.level, client.getCameraEntity() == null ? player : client.getCameraEntity(), !client.options.getCameraType().isFirstPerson(), client.options.getCameraType().isMirrored(), worldPartialTicks);
 
 			reproject(client, viewPitch, outH, projW, aspect, split, invert, fovx);
 			reprojectOutline(projW, outH, split, invert, fovx, viewPitch);
-			if (outlineRedirect != null) {
-				outlineRedirect.panini$setCurrentFrameRendersEntityOutline(anyOutline);
-			}
+
 			suppressHand = split;
 			try {
-				renderHand(gameRenderer);
+				renderHand(gameRenderer, worldPartialTicks);
 			} finally {
 				suppressHand = false;
 			}
@@ -540,17 +543,24 @@ public final class Fov360Renderer {
 		Fov360Config c = config();
 		return shouldRun(client)
 			&& !c.splitScreen
-			&& (rearOverlayPreview || (c.rearOverlay && !client.gui.hud.isHidden()));
+			&& (rearOverlayPreview || (c.rearOverlay && !client.gui.getBossOverlay().shouldPlayMusic())); // hidden during F1: !client.options.hideGui
 	}
 
 	public void renderRearOverlay(GameRenderer gameRenderer, DeltaTracker deltaTracker, boolean cubeFresh) {
 		Minecraft client = Minecraft.getInstance();
-		if (capturing || client.player == null || !rearOverlayActive(client)) {
+		if (capturing || client.player == null) {
 			return;
 		}
+		if (client.options.hideGui && !rearOverlayPreview) {
+			return;
+		}
+		Fov360Config c = config();
+		if (c.splitScreen || (!rearOverlayPreview && !c.rearOverlay)) {
+			return;
+		}
+
 		try {
-			Fov360Config c = config();
-			RenderTarget main = gameRenderer.mainRenderTarget();
+			RenderTarget main = client.getMainRenderTarget();
 			int x0 = Math.round(c.rearOverlayX * main.width);
 			int y0 = Math.round(c.rearOverlayY * main.height);
 			int x1 = Math.round((c.rearOverlayX + c.rearOverlayWidth) * main.width);
@@ -564,8 +574,11 @@ public final class Fov360Renderer {
 			int h = Math.max(MIN_REAR_SIZE, Math.round((y1 - y0) * scale));
 			ensureRearResources(w, h);
 
-			if (viewBlocked(gameRenderer)) {
-				RenderSystem.getDevice().createCommandEncoder().clearColorTexture(rearTarget.getColorTexture(), REAR_BLOCKED_COLOR);
+			if (viewBlocked(client)) {
+				rearTarget.bindWrite(true);
+				RenderSystem.clearColor(0.0F, 0.0F, 0.0F, 1.0F);
+				RenderSystem.clear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT, Minecraft.ON_OSX);
+				rearTarget.unbindWrite();
 				rearValid = false;
 			} else if (rearCaptureDue(client)) {
 				if (!(cubeFresh && reprojectRearFromCube(aspect))) {
@@ -582,8 +595,11 @@ public final class Fov360Renderer {
 		}
 	}
 
-	private static boolean viewBlocked(GameRenderer gameRenderer) {
-		return gameRenderer.gameRenderState().levelRenderState.playerRenderState.blockOverlay != null;
+	private static boolean viewBlocked(Minecraft client) {
+		if (client.player == null) {
+			return false;
+		}
+		return ScreenEffectRenderer.getViewBlockingState(client.player) != null;
 	}
 
 	private float rearFovx() {
@@ -602,7 +618,7 @@ public final class Fov360Renderer {
 	}
 
 	private boolean reprojectRearFromCube(float aspect) {
-		if (pipeline == null || uboSize <= 0 || stripCount > 0) {
+		if (programId == 0 || stripCount > 0) {
 			return false;
 		}
 		float scale = (float) Math.tan(rearFovx() * DEG2RAD / 2.0);
@@ -617,66 +633,74 @@ public final class Fov360Renderer {
 				}
 			}
 		}
-		if (uboBufferRear == null) {
-			uboBufferRear = RenderSystem.getDevice().createBuffer(
-				() -> "PaniniConfigRear",
-				GpuBuffer.USAGE_UNIFORM | GpuBuffer.USAGE_MAP_WRITE,
-				uboSize);
+		if (uboBufferRear == 0) {
+			uboBufferRear = GL15.glGenBuffers();
 		}
 		writeRearUbo(uboBufferRear, aspect, scale, false);
-		CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
-		runReprojectPass(encoder, "fov360 rear reproject", uboBufferRear, faces, rearTarget);
+		runReprojectPass("fov360 rear reproject", uboBufferRear, faces, rearTarget);
 
-		if (outlineRedirect != null && outlineRedirect.panini$getCurrentFrameRendersEntityOutline()) {
-			if (uboBufferRearOutline == null) {
-				uboBufferRearOutline = RenderSystem.getDevice().createBuffer(
-					() -> "PaniniConfigRearOutline",
-					GpuBuffer.USAGE_UNIFORM | GpuBuffer.USAGE_MAP_WRITE,
-					uboSize);
+		if (outlineRedirect != null && savedOutlineTarget != null) {
+			if (uboBufferRearOutline == 0) {
+				uboBufferRearOutline = GL15.glGenBuffers();
 			}
 			ensureRearOutlineTarget();
 			writeRearUbo(uboBufferRearOutline, aspect, scale, true);
-			runReprojectPass(encoder, "fov360 rear outline reproject", uboBufferRearOutline, outlineFaces, rearOutlineTarget);
-			rearOutlineTarget.blitAndBlendToTexture(rearTarget.getColorTextureView(), rearTarget.getDepthTextureView());
+			runReprojectPass("fov360 rear outline reproject", uboBufferRearOutline, outlineFaces, rearOutlineTarget);
+			blitOutline(rearOutlineTarget, rearTarget);
 		}
 		return true;
 	}
 
-	private void writeRearUbo(GpuBuffer ubo, float aspect, float scale, boolean outline) {
+	private void writeRearUbo(int ubo, float aspect, float scale, boolean outline) {
 		float aa = Mth.clamp(config().antialiasSamples, 1, 4);
-		try (GpuBufferSlice.MappedView view = ubo.map(false, true)) {
-			Std140Builder b = Std140Builder.intoBuffer(view.data());
-			for (int i = 0; i < 6; i++) {
-				b.putMat4f(coordFrames[i]);
-			}
-			b.putVec4(rearFovx(), aspect, lastViewPitch, aa);
-			b.putVec4((float) rearWidth, (float) rearHeight, 0.0F, 0.0F);
-			b.putVec4(scale, 0.0F, 0.0F, 0.0F);
-			b.putVec4(0.0F, outline ? 1.0F : 0.0F, 0.0F, 1.0F);
-			b.putVec4(en(0), en(1), en(2), en(3));
-			b.putVec4(en(4), en(5), 0.0F, 0.0F);
-			b.putVec4(Fov360Projection.RECTILINEAR.ordinal(), Fov360Projection.RECTILINEAR.ordinal(), 0.0F, 0.0F);
-			b.putVec4(paniniD, stereographicK, 0.0F, 0.0F);
-			putTileTans(b);
+		FloatBuffer fb = uboFloatBuffer;
+		fb.clear();
+		for (int i = 0; i < 6; i++) {
+			coordFrames[i].get(mat4Scratch);
+			fb.put(mat4Scratch);
 		}
+		fb.put(rearFovx()).put(aspect).put(lastViewPitch).put(aa);
+		fb.put((float) rearWidth).put((float) rearHeight).put(0.0F).put(0.0F);
+		fb.put(scale).put(0.0F).put(0.0F).put(0.0F);
+		fb.put(0.0F).put(outline ? 1.0F : 0.0F).put(0.0F).put(1.0F);
+		fb.put(en(0)).put(en(1)).put(en(2)).put(en(3));
+		fb.put(en(4)).put(en(5)).put(0.0F).put(0.0F);
+		fb.put((float) Fov360Projection.RECTILINEAR.ordinal()).put((float) Fov360Projection.RECTILINEAR.ordinal()).put(0.0F).put(0.0F);
+		fb.put(paniniD).put(stereographicK).put(0.0F).put(0.0F);
+		putTileTans(fb);
+		fb.flip();
+
+		GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, ubo);
+		GL15.glBufferData(GL31.GL_UNIFORM_BUFFER, fb, GL15.GL_DYNAMIC_DRAW);
+		GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0);
 	}
 
-	private void putTileTans(Std140Builder b) {
+	private void putTileTans(FloatBuffer fb) {
 		for (int i = 0; i < 6; i++) {
-			b.putVec4(1.0F / tileTanX[i], 1.0F / tileTanY[i], 0.0F, 0.0F);
+			fb.put(1.0F / tileTanX[i]).put(1.0F / tileTanY[i]).put(0.0F).put(0.0F);
 		}
 	}
 
 	private void ensureRearOutlineTarget() {
 		if (rearOutlineTarget == null) {
-			rearOutlineTarget = new TextureTarget("fov360_rear_outline", rearWidth, rearHeight, GpuFormat.RGBA8_UNORM, GpuFormat.D32_FLOAT);
+			rearOutlineTarget = new TextureTarget(rearWidth, rearHeight, true, Minecraft.ON_OSX);
 		}
 	}
 
+	private void blitOutline(RenderTarget src, RenderTarget dst) {
+		if (src == null || dst == null) {
+			return;
+		}
+		GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, src.frameBufferId);
+		GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, dst.frameBufferId);
+		GL30.glBlitFramebuffer(0, 0, src.width, src.height, 0, 0, dst.width, dst.height, GL11.GL_COLOR_BUFFER_BIT, GL11.GL_NEAREST);
+		GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
+	}
+
 	private void captureRear(Minecraft client, GameRenderer gameRenderer, DeltaTracker deltaTracker, float aspect) {
-		Camera realCamera = gameRenderer.mainCamera();
+		Camera realCamera = gameRenderer.getMainCamera();
 		float worldPartialTicks = deltaTracker.getGameTimeDeltaPartialTick(false);
-		updateViewAngles(client, client.player, realCamera.getCameraEntityPartialTicks(deltaTracker));
+		updateViewAngles(client, client.player, worldPartialTicks);
 		float rearYaw = frameViewYaw + 180.0F;
 		float rearPitch = -frameViewPitch;
 		float vertical = (float) Math.toDegrees(2.0 * Math.atan(Math.tan(rearFovx() * DEG2RAD / 2.0) / aspect));
@@ -687,10 +711,8 @@ public final class Fov360Renderer {
 		captureViewForward.set(0.0F, 0.0F, -1.0F).rotate(qPlayer);
 		capturedFogType = realCamera.getFluidInCamera();
 
-		GameRendererInvoker inv = (GameRendererInvoker) gameRenderer;
 		LevelRendererAccessor lr = (LevelRendererAccessor) client.levelRenderer;
 		RenderTarget realOutline = lr.panini$getEntityOutlineTarget();
-		boolean realRendersOutline = lr.panini$getCurrentFrameRendersEntityOutline();
 		if (realOutline != null) {
 			ensureRearOutlineTarget();
 		}
@@ -708,12 +730,10 @@ public final class Fov360Renderer {
 			lr.panini$setEntityOutlineTarget(rearOutlineTarget);
 		}
 		try {
-			realCamera.update(deltaTracker);
-			inv.panini$extractCamera(deltaTracker, worldPartialTicks);
-			client.levelExtractor.extract(deltaTracker, realCamera, worldPartialTicks);
-			gameRenderer.renderLevel();
-			if (realOutline != null && lr.panini$getCurrentFrameRendersEntityOutline()) {
-				rearOutlineTarget.blitAndBlendToTexture(rearTarget.getColorTextureView(), rearTarget.getDepthTextureView());
+			realCamera.setup(client.level, client.getCameraEntity() == null ? client.player : client.getCameraEntity(), !client.options.getCameraType().isFirstPerson(), client.options.getCameraType().isMirrored(), worldPartialTicks);
+			gameRenderer.renderLevel(deltaTracker);
+			if (realOutline != null) {
+				blitOutline(rearOutlineTarget, rearTarget);
 			}
 		} finally {
 			currentTarget = null;
@@ -725,9 +745,7 @@ public final class Fov360Renderer {
 			if (realOutline != null) {
 				lr.panini$setEntityOutlineTarget(realOutline);
 			}
-			lr.panini$setCurrentFrameRendersEntityOutline(realRendersOutline);
-			realCamera.update(deltaTracker);
-			inv.panini$extractCamera(deltaTracker, worldPartialTicks);
+			realCamera.setup(client.level, client.getCameraEntity() == null ? client.player : client.getCameraEntity(), !client.options.getCameraType().isFirstPerson(), client.options.getCameraType().isMirrored(), worldPartialTicks);
 		}
 	}
 
@@ -747,67 +765,65 @@ public final class Fov360Renderer {
 		v[9] = REAR_BORDER_GRAY;
 		v[10] = REAR_BORDER_GRAY;
 		v[11] = 1.0F;
-		if (!overlayUboFresh || !Arrays.equals(v, overlayUboWritten)) {
-			try (GpuBufferSlice.MappedView view = overlayUbo.map(false, true)) {
-				Std140Builder b = Std140Builder.intoBuffer(view.data());
-				for (int i = 0; i < OVERLAY_UBO_FLOATS; i += 4) {
-					b.putVec4(v[i], v[i + 1], v[i + 2], v[i + 3]);
-				}
-			}
-			System.arraycopy(v, 0, overlayUboWritten, 0, OVERLAY_UBO_FLOATS);
-			overlayUboFresh = true;
-		}
-		CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
-		try (RenderPass pass = encoder.createRenderPass(
-				() -> "fov360 rear overlay",
-				out.getColorTextureView(), Optional.empty(),
-				null, OptionalDouble.empty())) {
-			pass.setPipeline(RenderSystem.getCompiledPipeline(overlayPipeline));
-			RenderSystem.bindDefaultUniforms(pass);
-			pass.setUniform("RearOverlayConfig", overlayUbo);
-			pass.setUniform("RearSampler", rearTarget.getColorTextureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
-			pass.draw(OVERLAY_VERTICES, 1, 0, 0);
-		}
+
+		FloatBuffer fb = overlayUboFloatBuffer;
+		fb.clear();
+		fb.put(v);
+		fb.flip();
+
+		GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, overlayUbo);
+		GL15.glBufferData(GL31.GL_UNIFORM_BUFFER, fb, GL15.GL_DYNAMIC_DRAW);
+		GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0);
+
+		out.bindWrite(true);
+		GL20.glUseProgram(overlayProgramId);
+		GL30.glBindBufferBase(GL31.GL_UNIFORM_BUFFER, 0, overlayUbo);
+		GL13.glActiveTexture(GL13.GL_TEXTURE0);
+		GL11.glBindTexture(GL11.GL_TEXTURE_2D, rearTarget.getColorTextureId());
+		GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
+		GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
+		GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+		GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+
+		GL30.glBindVertexArray(emptyVao);
+		GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, OVERLAY_VERTICES);
+		GL30.glBindVertexArray(0);
+		GL20.glUseProgram(0);
 	}
 
 	private void ensureRearResources(int w, int h) {
-		ensureDevice();
+		ensureBaseGl();
 		if (rearTarget == null) {
-			rearTarget = new TextureTarget("fov360_rear", w, h, GpuFormat.RGBA8_UNORM, GpuFormat.D32_FLOAT);
+			rearTarget = new TextureTarget(w, h, true, Minecraft.ON_OSX);
 			rearValid = false;
 		} else if (rearWidth != w || rearHeight != h) {
-			rearTarget.resize(w, h);
+			rearTarget.resize(w, h, Minecraft.ON_OSX);
 			if (rearOutlineTarget != null) {
-				rearOutlineTarget.resize(w, h);
+				rearOutlineTarget.resize(w, h, Minecraft.ON_OSX);
 			}
 			rearValid = false;
 		}
 		rearWidth = w;
 		rearHeight = h;
 
-		if (overlayPipeline == null) {
-			RenderPipeline.Builder builder = RenderPipeline.builder(RenderPipelines.POST_PROCESSING_SNIPPET)
-				.withLocation(Identifier.fromNamespaceAndPath("fov360", "pipeline/rear_overlay"))
-				.withVertexShader(Identifier.fromNamespaceAndPath("fov360", "post/rear_overlay"))
-				.withFragmentShader(Identifier.fromNamespaceAndPath("fov360", "post/rear_overlay"));
-			builder.withBindGroupLayout(BindGroupLayout.builder()
-				.withUniform("RearSampler", UniformType.COMBINED_IMAGE_SAMPLER)
-				.withUniform("RearOverlayConfig", UniformType.UNIFORM_BUFFER)
-				.build());
-			builder.withColorTargetState(ColorTargetState.DEFAULT);
-			overlayPipeline = builder.build();
+		if (overlayProgramId == 0) {
+			String vertSrc = loadShaderSource("/assets/fov360/shaders/post/rear_overlay.vsh");
+			String fragSrc = loadShaderSource("/assets/fov360/shaders/post/rear_overlay.fsh");
+			overlayProgramId = createProgram(vertSrc, fragSrc);
+			int blockIndex = GL31.glGetUniformBlockIndex(overlayProgramId, "RearOverlayConfig");
+			if (blockIndex != -1) {
+				GL31.glUniformBlockBinding(overlayProgramId, blockIndex, 0);
+			}
+			GL20.glUseProgram(overlayProgramId);
+			int loc = GL20.glGetUniformLocation(overlayProgramId, "RearSampler");
+			if (loc != -1) {
+				GL20.glUniform1i(loc, 0);
+			}
+			GL20.glUseProgram(0);
 		}
 
-		if (overlayUbo == null) {
-			Std140SizeCalculator calc = new Std140SizeCalculator();
-			for (int i = 0; i < 3; i++) {
-				calc.putVec4();
-			}
-			overlayUbo = RenderSystem.getDevice().createBuffer(
-				() -> "RearOverlayConfig",
-				GpuBuffer.USAGE_UNIFORM | GpuBuffer.USAGE_MAP_WRITE,
-				calc.get());
-			overlayUboFresh = false;
+		if (overlayUbo == 0) {
+			overlayUbo = GL15.glGenBuffers();
 		}
 	}
 
@@ -1263,97 +1279,61 @@ public final class Fov360Renderer {
 		return Math.max(256, rounded);
 	}
 
-	private void ensureDevice() {
-		GpuDevice device = RenderSystem.getDevice();
-		if (resourceDevice == device) {
-			return;
+	private void ensureBaseGl() {
+		if (emptyVao == 0) {
+			emptyVao = GL30.glGenVertexArrays();
 		}
-		for (int i = 0; i < 6; i++) {
-			faces[i] = null;
-			faceWidths[i] = 0;
-			faceHeights[i] = 0;
-			outlineFaces[i] = null;
-			outlineWidths[i] = 0;
-			outlineHeights[i] = 0;
-		}
-		pipeline = null;
-		uboBuffer = null;
-		uboBufferOutline = null;
-		uboSize = -1;
-		rearTarget = null;
-		rearOutlineTarget = null;
-		rearWidth = 0;
-		rearHeight = 0;
-		overlayPipeline = null;
-		uboBufferRear = null;
-		uboBufferRearOutline = null;
-		overlayUbo = null;
-		rearValid = false;
-		resourceDevice = device;
 	}
 
 	private void ensureResources() {
-		ensureDevice();
-		GpuDevice device = RenderSystem.getDevice();
+		ensureBaseGl();
 
 		for (int k = 0; k < 6; k++) {
 			if (!faceEnabled[k]) {
 				continue;
 			}
-			faces[k] = fitTarget(faces[k], "fov360_face_" + k, k, faceWidths, faceHeights);
-			outlineFaces[k] = fitTarget(outlineFaces[k], "fov360_outline_" + k, k, outlineWidths, outlineHeights);
+			faces[k] = fitTarget(faces[k], k, faceWidths, faceHeights);
+			outlineFaces[k] = fitTarget(outlineFaces[k], k, outlineWidths, outlineHeights);
 		}
 
-		if (pipeline == null) {
-			RenderPipeline.Builder builder = RenderPipeline.builder(RenderPipelines.POST_PROCESSING_SNIPPET)
-				.withLocation(Identifier.fromNamespaceAndPath("fov360", "pipeline/fov360"))
-				.withVertexShader(Identifier.withDefaultNamespace("core/screenquad"))
-				.withFragmentShader(Identifier.fromNamespaceAndPath("fov360", "post/fov360"));
-			BindGroupLayout.Builder bindGroup = BindGroupLayout.builder();
+		if (programId == 0) {
+			String fragSrc = loadShaderSource("/assets/fov360/shaders/post/fov360.fsh");
+			programId = createProgram(QUAD_VERT, fragSrc);
+			int blockIndex = GL31.glGetUniformBlockIndex(programId, "PaniniConfig");
+			if (blockIndex != -1) {
+				GL31.glUniformBlockBinding(programId, blockIndex, 0);
+			}
+			GL20.glUseProgram(programId);
 			for (int i = 0; i < 6; i++) {
-				bindGroup.withUniform("Face" + i + "Sampler", UniformType.COMBINED_IMAGE_SAMPLER);
+				int loc = GL20.glGetUniformLocation(programId, "Face" + i + "Sampler");
+				if (loc != -1) {
+					GL20.glUniform1i(loc, i);
+				}
 			}
-			bindGroup.withUniform("PaniniConfig", UniformType.UNIFORM_BUFFER);
-			builder.withBindGroupLayout(bindGroup.build());
-			builder.withColorTargetState(ColorTargetState.DEFAULT);
-			pipeline = builder.build();
+			GL20.glUseProgram(0);
 		}
 
-		if (uboBuffer == null) {
-			Std140SizeCalculator calc = new Std140SizeCalculator();
-			for (int i = 0; i < 6; i++) {
-				calc.putMat4f();
-			}
-			for (int i = 0; i < 14; i++) {
-				calc.putVec4();
-			}
-			uboSize = calc.get();
-			uboBuffer = device.createBuffer(
-				() -> "PaniniConfig",
-				GpuBuffer.USAGE_UNIFORM | GpuBuffer.USAGE_MAP_WRITE,
-				uboSize);
+		if (uboBuffer == 0) {
+			uboBuffer = GL15.glGenBuffers();
 		}
 
-		if (uboBufferOutline == null) {
-			uboBufferOutline = device.createBuffer(
-				() -> "PaniniConfigOutline",
-				GpuBuffer.USAGE_UNIFORM | GpuBuffer.USAGE_MAP_WRITE,
-				uboSize);
+		if (uboBufferOutline == 0) {
+			uboBufferOutline = GL15.glGenBuffers();
 		}
 	}
 
-	private RenderTarget fitTarget(RenderTarget target, String name, int k, int[] widths, int[] heights) {
+	private RenderTarget fitTarget(RenderTarget target, int k, int[] widths, int[] heights) {
 		int w = tileWidths[k];
 		int h = tileHeights[k];
 		if (target == null) {
 			widths[k] = w;
 			heights[k] = h;
-			return new TextureTarget(name, w, h, GpuFormat.RGBA8_UNORM, GpuFormat.D32_FLOAT);
+			return new TextureTarget(w, h, true, Minecraft.ON_OSX);
 		}
 		boolean fits = widths[k] >= w && heights[k] >= h
 			&& widths[k] <= w * TILE_KEEP_OVERSIZE && heights[k] <= h * TILE_KEEP_OVERSIZE;
 		if (!fits) {
-			target.resize(w, h);
+			target.resize(w, h, Minecraft.ON_OSX);
 			widths[k] = w;
 			heights[k] = h;
 		}
@@ -1362,10 +1342,9 @@ public final class Fov360Renderer {
 
 	private void reproject(Minecraft client, float viewPitch, int outH, float projW,
 			float aspect, boolean split, boolean invert, float fovx) {
-		RenderTarget out = client.gameRenderer.mainRenderTarget();
-		CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
-		writeUbo(encoder, uboBuffer, fovx, aspect, viewPitch, projW, outH, split, invert, false);
-		runReprojectPass(encoder, "fov360 reproject", uboBuffer, faces, out);
+		RenderTarget out = client.getMainRenderTarget();
+		writeUbo(uboBuffer, fovx, aspect, viewPitch, projW, outH, split, invert, false);
+		runReprojectPass("fov360 reproject", uboBuffer, faces, out);
 	}
 
 	private void reprojectOutline(float projW, int outH, boolean split, boolean invert, float fovx,
@@ -1374,46 +1353,56 @@ public final class Fov360Renderer {
 			return;
 		}
 		float aspect = projW / (float) outH;
-		CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
-		writeUbo(encoder, uboBufferOutline, fovx, aspect, viewPitch, projW, outH, split, invert, true);
-		runReprojectPass(encoder, "fov360 outline reproject", uboBufferOutline, outlineFaces, savedOutlineTarget);
+		writeUbo(uboBufferOutline, fovx, aspect, viewPitch, projW, outH, split, invert, true);
+		runReprojectPass("fov360 outline reproject", uboBufferOutline, outlineFaces, savedOutlineTarget);
 	}
 
-	private void writeUbo(CommandEncoder encoder, GpuBuffer ubo, float fovx, float aspect, float viewPitch,
+	private void writeUbo(int ubo, float fovx, float aspect, float viewPitch,
 			float projW, int outH, boolean split, boolean invert, boolean outline) {
 		float aa = Mth.clamp(config().antialiasSamples, 1, 4);
-		try (GpuBufferSlice.MappedView view = ubo.map(false, true)) {
-			Std140Builder b = Std140Builder.intoBuffer(view.data());
-			for (int i = 0; i < 6; i++) {
-				b.putMat4f(coordFrames[i]);
-			}
-			b.putVec4(fovx, aspect, viewPitch, aa);
-			b.putVec4(projW, (float) outH, split ? 1.0F : 0.0F, invert ? 1.0F : 0.0F);
-			b.putVec4(scaleStd, scalePan, scaleSte, scaleMer);
-			b.putVec4(scaleEqu, outline ? 1.0F : 0.0F, scaleFish, 0.0F);
-			b.putVec4(en(0), en(1), en(2), en(3));
-			b.putVec4(en(4), en(5), 0.0F, 0.0F);
-			b.putVec4(blendFrom.ordinal(), blendTo.ordinal(), blendsTo() ? blendT : 0.0F, 0.0F);
-			b.putVec4(paniniD, stereographicK, 0.0F, 0.0F);
-			putTileTans(b);
+		FloatBuffer fb = uboFloatBuffer;
+		fb.clear();
+		for (int i = 0; i < 6; i++) {
+			coordFrames[i].get(mat4Scratch);
+			fb.put(mat4Scratch);
 		}
+		fb.put(fovx).put(aspect).put(viewPitch).put(aa);
+		fb.put(projW).put((float) outH).put(split ? 1.0F : 0.0F).put(invert ? 1.0F : 0.0F);
+		fb.put(scaleStd).put(scalePan).put(scaleSte).put(scaleMer);
+		fb.put(scaleEqu).put(outline ? 1.0F : 0.0F).put(scaleFish).put(0.0F);
+		fb.put(en(0)).put(en(1)).put(en(2)).put(en(3));
+		fb.put(en(4)).put(en(5)).put(0.0F).put(0.0F);
+		fb.put((float) blendFrom.ordinal()).put((float) blendTo.ordinal()).put(blendsTo() ? blendT : 0.0F).put(0.0F);
+		fb.put(paniniD).put(stereographicK).put(0.0F).put(0.0F);
+		putTileTans(fb);
+		fb.flip();
+
+		GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, ubo);
+		GL15.glBufferData(GL31.GL_UNIFORM_BUFFER, fb, GL15.GL_DYNAMIC_DRAW);
+		GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0);
 	}
 
-	private void runReprojectPass(CommandEncoder encoder, String label, GpuBuffer ubo,
+	private void runReprojectPass(String label, int ubo,
 			RenderTarget[] srcFaces, RenderTarget out) {
-		try (RenderPass pass = encoder.createRenderPass(
-				() -> label,
-				out.getColorTextureView(), Optional.empty(),
-				null, OptionalDouble.empty())) {
-			pass.setPipeline(RenderSystem.getCompiledPipeline(pipeline));
-			RenderSystem.bindDefaultUniforms(pass);
-			pass.setUniform("PaniniConfig", ubo);
-			for (int i = 0; i < 6; i++) {
-				RenderTarget f = (faceEnabled[i] && srcFaces[i] != null) ? srcFaces[i] : srcFaces[0];
-				pass.setUniform("Face" + i + "Sampler", f.getColorTextureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
-			}
-			pass.draw(3, 1, 0, 0);
+		out.bindWrite(true);
+		GL20.glUseProgram(programId);
+		GL30.glBindBufferBase(GL31.GL_UNIFORM_BUFFER, 0, ubo);
+		for (int i = 0; i < 6; i++) {
+			GL13.glActiveTexture(GL13.GL_TEXTURE0 + i);
+			RenderTarget f = (faceEnabled[i] && srcFaces[i] != null) ? srcFaces[i] : srcFaces[0];
+			int texId = f != null ? f.getColorTextureId() : 0;
+			GL11.glBindTexture(GL11.GL_TEXTURE_2D, texId);
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
 		}
+		GL13.glActiveTexture(GL13.GL_TEXTURE0);
+
+		GL30.glBindVertexArray(emptyVao);
+		GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3);
+		GL30.glBindVertexArray(0);
+		GL20.glUseProgram(0);
 	}
 
 	private void beginOutlineCapture(Minecraft client) {
@@ -1437,15 +1426,14 @@ public final class Fov360Renderer {
 		}
 	}
 
-	private void renderHand(GameRenderer gameRenderer) {
-		GameRenderState renderState = gameRenderer.gameRenderState();
+	private void renderHand(GameRenderer gameRenderer, float partialTicks) {
 		ProfilerFiller profiler = Profiler.get();
 		profiler.push("fov360_hud");
-		((GameRendererInvoker) gameRenderer).panini$render3dHud(
-			renderState.levelRenderState.cameraRenderState,
-			renderState.levelRenderState.playerRenderState,
-			renderState.optionsRenderState,
-			false);
+		try {
+			((GameRendererInvoker) gameRenderer).panini$renderItemInHand(new PoseStack(), gameRenderer.getMainCamera(), partialTicks);
+		} finally {
+			profiler.pop();
+		}
 	}
 
 	private float en(int i) {
@@ -1468,6 +1456,46 @@ public final class Fov360Renderer {
 		float offset = boundaryHorizontal - 90.0F;
 		float falloff = (180.0F - rawFov) / 90.0F;
 		return rawFov + offset * falloff;
+	}
+
+	private static int compileShader(int type, String source) {
+		int shader = GL20.glCreateShader(type);
+		GL20.glShaderSource(shader, source);
+		GL20.glCompileShader(shader);
+		if (GL20.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) == GL11.GL_FALSE) {
+			String log = GL20.glGetShaderInfoLog(shader);
+			GL20.glDeleteShader(shader);
+			throw new RuntimeException("Shader compilation failed: " + log);
+		}
+		return shader;
+	}
+
+	private static int createProgram(String vertSrc, String fragSrc) {
+		int vert = compileShader(GL20.GL_VERTEX_SHADER, vertSrc);
+		int frag = compileShader(GL20.GL_FRAGMENT_SHADER, fragSrc);
+		int program = GL20.glCreateProgram();
+		GL20.glAttachShader(program, vert);
+		GL20.glAttachShader(program, frag);
+		GL20.glLinkProgram(program);
+		GL20.glDeleteShader(vert);
+		GL20.glDeleteShader(frag);
+		if (GL20.glGetProgrami(program, GL20.GL_LINK_STATUS) == GL11.GL_FALSE) {
+			String log = GL20.glGetProgramInfoLog(program);
+			GL20.glDeleteProgram(program);
+			throw new RuntimeException("Program linking failed: " + log);
+		}
+		return program;
+	}
+
+	private static String loadShaderSource(String resourcePath) {
+		try (InputStream in = Fov360Renderer.class.getResourceAsStream(resourcePath)) {
+			if (in == null) {
+				throw new IOException("Resource not found: " + resourcePath);
+			}
+			return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+		} catch (IOException e) {
+			throw new RuntimeException("Failed to read shader: " + resourcePath, e);
+		}
 	}
 
 	private void fail(Throwable t) {

@@ -4,12 +4,11 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.blaze3d.platform.Window;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.narration.NarratedElementType;
 import net.minecraft.client.gui.narration.NarrationElementOutput;
-import net.minecraft.client.input.KeyEvent;
-import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 
@@ -88,13 +87,13 @@ public final class Fov360RearViewWidget extends AbstractWidget {
 	}
 
 	@Override
-	public void onClick(MouseButtonEvent event, boolean doubleClick) {
-		dragLeft = nearLeft(event.x());
-		dragRight = !dragLeft && nearRight(event.x());
-		dragTop = nearTop(event.y());
-		dragBottom = !dragTop && nearBottom(event.y());
-		startMouseX = event.x();
-		startMouseY = event.y();
+	public void onClick(double mouseX, double mouseY) {
+		dragLeft = nearLeft(mouseX);
+		dragRight = !dragLeft && nearRight(mouseX);
+		dragTop = nearTop(mouseY);
+		dragBottom = !dragTop && nearBottom(mouseY);
+		startMouseX = mouseX;
+		startMouseY = mouseY;
 		startX = config.rearOverlayX;
 		startY = config.rearOverlayY;
 		startWidth = config.rearOverlayWidth;
@@ -103,12 +102,12 @@ public final class Fov360RearViewWidget extends AbstractWidget {
 	}
 
 	@Override
-	protected void onDrag(MouseButtonEvent event, double dragX, double dragY) {
+	protected void onDrag(double mouseX, double mouseY, double dragX, double dragY) {
 		if (!dragging) {
 			return;
 		}
-		float dx = (float) ((event.x() - startMouseX) / screenWidth);
-		float dy = (float) ((event.y() - startMouseY) / screenHeight);
+		float dx = (float) ((mouseX - startMouseX) / screenWidth);
+		float dy = (float) ((mouseY - startMouseY) / screenHeight);
 		float min = Fov360Config.MIN_REAR_OVERLAY_SIZE;
 		if (!dragLeft && !dragRight && !dragTop && !dragBottom) {
 			config.rearOverlayX = Mth.clamp(startX + dx, 0.0F, 1.0F - startWidth);
@@ -139,7 +138,7 @@ public final class Fov360RearViewWidget extends AbstractWidget {
 	}
 
 	@Override
-	public void onRelease(MouseButtonEvent event) {
+	public void onRelease(double mouseX, double mouseY) {
 		if (dragging) {
 			dragging = false;
 			onRelease.run();
@@ -147,11 +146,13 @@ public final class Fov360RearViewWidget extends AbstractWidget {
 	}
 
 	@Override
-	public boolean keyPressed(KeyEvent event) {
-		float step = event.hasControlDown() ? KEY_STEP_LARGE : KEY_STEP;
+	public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+		boolean ctrl = Screen.hasControlDown();
+		boolean shift = Screen.hasShiftDown();
+		float step = ctrl ? KEY_STEP_LARGE : KEY_STEP;
 		float dx = 0.0F;
 		float dy = 0.0F;
-		switch (event.key()) {
+		switch (keyCode) {
 			case InputConstants.KEY_LEFT -> dx = -step;
 			case InputConstants.KEY_RIGHT -> dx = step;
 			case InputConstants.KEY_UP -> dy = -step;
@@ -160,7 +161,7 @@ public final class Fov360RearViewWidget extends AbstractWidget {
 				return false;
 			}
 		}
-		if (event.hasShiftDown()) {
+		if (shift) {
 			config.rearOverlayWidth += dx;
 			config.rearOverlayHeight += dy;
 		} else {
@@ -173,7 +174,7 @@ public final class Fov360RearViewWidget extends AbstractWidget {
 	}
 
 	@Override
-	protected void extractWidgetRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+	protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
 		Minecraft client = Minecraft.getInstance();
 		Font font = client.font;
 		int l = left();
@@ -184,13 +185,13 @@ public final class Fov360RearViewWidget extends AbstractWidget {
 		if (client.level == null) {
 			graphics.fill(l, t, r, b, EMPTY_FILL);
 			Component empty = Component.translatable("fov360.rearView.noWorld");
-			graphics.text(font, empty, (l + r - font.width(empty)) / 2, (t + b - font.lineHeight) / 2, TEXT_COLOR, false);
+			graphics.drawString(font, empty, (l + r - font.width(empty)) / 2, (t + b - font.lineHeight) / 2, TEXT_COLOR, false);
 		}
 
 		boolean active = dragging || isHovered() || isFocused();
 		int color = active ? ACTIVE_COLOR : IDLE_COLOR;
-		graphics.outline(l - 2, t - 2, r - l + 4, b - t + 4, SHADOW_COLOR);
-		graphics.outline(l - 1, t - 1, r - l + 2, b - t + 2, color);
+		graphics.renderOutline(l - 2, t - 2, r - l + 4, b - t + 4, SHADOW_COLOR);
+		graphics.renderOutline(l - 1, t - 1, r - l + 2, b - t + 2, color);
 
 		int mx = (l + r) / 2;
 		int my = (t + b) / 2;
@@ -204,10 +205,10 @@ public final class Fov360RearViewWidget extends AbstractWidget {
 			Math.round(config.rearOverlayWidth * window.getWidth()),
 			Math.round(config.rearOverlayHeight * window.getHeight()));
 		int labelY = b + GRAB + 2 + font.lineHeight <= screenHeight ? b + GRAB + 2 : t - GRAB - 2 - font.lineHeight;
-		graphics.text(font, size, l, labelY, TEXT_COLOR, true);
+		graphics.drawString(font, size, l, labelY, TEXT_COLOR, true);
 
 		if (!dragging && isHovered()) {
-			graphics.setComponentTooltipForNextFrame(font, List.of(Component.translatable("fov360.rearView.hint")), mouseX, mouseY);
+			graphics.renderComponentTooltip(font, List.of(Component.translatable("fov360.rearView.hint")), mouseX, mouseY);
 		}
 	}
 

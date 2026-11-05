@@ -3,15 +3,12 @@ package xpncvr.fov360;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.narration.NarratedElementType;
 import net.minecraft.client.gui.narration.NarrationElementOutput;
-import net.minecraft.client.input.KeyEvent;
-import net.minecraft.client.input.MouseButtonEvent;
-import net.minecraft.client.input.MouseButtonInfo;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
-import net.minecraft.util.ARGB;
 import net.minecraft.util.Mth;
 
 import java.util.ArrayList;
@@ -151,63 +148,78 @@ public final class Fov360ThresholdWidget extends AbstractWidget {
 	}
 
 	@Override
-	protected boolean isValidClickButton(MouseButtonInfo info) {
-		return info.button() == InputConstants.MOUSE_BUTTON_LEFT || info.button() == InputConstants.MOUSE_BUTTON_RIGHT;
-	}
-
-	@Override
-	public void onClick(MouseButtonEvent event, boolean doubleClick) {
-		int hit = pointAt(event.x(), event.y());
-		if (event.button() == InputConstants.MOUSE_BUTTON_RIGHT) {
+	public boolean mouseClicked(double mouseX, double mouseY, int button) {
+		if (!this.active || !this.visible) {
+			return false;
+		}
+		int hit = pointAt(mouseX, mouseY);
+		if (button == InputConstants.MOUSE_BUTTON_RIGHT) {
 			if (hit >= 0) {
 				select(hit);
 				removeSelected();
-			} else if (overTrack(event.x(), event.y())) {
-				setPlayerFov(xToFov(event.x()));
+				return true;
+			} else if (overTrack(mouseX, mouseY)) {
+				setPlayerFov(xToFov(mouseX));
+				return true;
 			}
-			return;
+			return false;
 		}
-		if (hit < 0 && overTrack(event.x(), event.y())) {
-			hit = insertPoint(xToFov(event.x()));
+		if (button == InputConstants.MOUSE_BUTTON_LEFT) {
+			if (hit < 0 && overTrack(mouseX, mouseY)) {
+				hit = insertPoint(xToFov(mouseX));
+			}
+			if (hit >= 0) {
+				select(hit);
+				dragging = true;
+				onChange.run();
+				return true;
+			}
 		}
-		if (hit >= 0) {
-			select(hit);
-			dragging = true;
-			onChange.run();
-		}
+		return super.mouseClicked(mouseX, mouseY, button);
 	}
 
 	@Override
-	protected void onDrag(MouseButtonEvent event, double dragX, double dragY) {
+	protected void onDrag(double mouseX, double mouseY, double dragX, double dragY) {
 		if (dragging) {
-			moveSelected(xToFov(event.x()));
+			moveSelected(xToFov(mouseX));
 		}
 	}
 
 	@Override
-	public void onRelease(MouseButtonEvent event) {
+	public boolean mouseReleased(double mouseX, double mouseY, int button) {
 		dragging = false;
+		return super.mouseReleased(mouseX, mouseY, button);
 	}
 
 	@Override
-	public boolean keyPressed(KeyEvent event) {
-		int step = event.hasShiftDown() ? 10 : 1;
-		if (event.isLeft()) {
+	public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+		int step = Screen.hasShiftDown() ? 10 : 1;
+		if (keyCode == InputConstants.KEY_LEFT) {
 			moveSelected(selectedPoint().fov - step);
 			return true;
 		}
-		if (event.isRight()) {
+		if (keyCode == InputConstants.KEY_RIGHT) {
 			moveSelected(selectedPoint().fov + step);
 			return true;
 		}
-		if (event.key() == InputConstants.KEY_DELETE || event.key() == InputConstants.KEY_BACKSPACE) {
+		if (keyCode == InputConstants.KEY_DELETE || keyCode == InputConstants.KEY_BACKSPACE) {
 			return removeSelected();
 		}
 		return false;
 	}
 
+	private static int srgbLerp(float t, int c1, int c2) {
+		int a1 = (c1 >> 24) & 0xFF, r1 = (c1 >> 16) & 0xFF, g1 = (c1 >> 8) & 0xFF, b1 = c1 & 0xFF;
+		int a2 = (c2 >> 24) & 0xFF, r2 = (c2 >> 16) & 0xFF, g2 = (c2 >> 8) & 0xFF, b2 = c2 & 0xFF;
+		int a = Math.round(a1 + t * (a2 - a1));
+		int r = Math.round(r1 + t * (r2 - r1));
+		int g = Math.round(g1 + t * (g2 - g1));
+		int b = Math.round(b1 + t * (b2 - b1));
+		return (a << 24) | (r << 16) | (g << 8) | b;
+	}
+
 	@Override
-	protected void extractWidgetRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+	protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
 		Font font = Minecraft.getInstance().font;
 		int left = trackLeft();
 		int right = trackRight();
@@ -215,21 +227,21 @@ public final class Fov360ThresholdWidget extends AbstractWidget {
 		int bottom = bandBottom();
 
 		graphics.fill(getX(), getY(), getRight(), getBottom(), 0xA0101418);
-		graphics.outline(getX(), getY(), getWidth(), getHeight(), isFocused() ? 0xFFFFFFFF : 0xFF5A6068);
+		graphics.renderOutline(getX(), getY(), getWidth(), getHeight(), isFocused() ? 0xFFFFFFFF : 0xFF5A6068);
 
 		for (int x = left; x < right; x++) {
 			Fov360Config.ProjectionBlend blend = Fov360Config.sample(points, xToFov(x + 0.5));
-			int color = ARGB.srgbLerp(blend.t(), blend.from().color(), blend.to().color());
+			int color = srgbLerp(blend.t(), blend.from().color(), blend.to().color());
 			graphics.fill(x, top, x + 1, bottom, color);
 		}
-		graphics.outline(left - 1, top - 1, right - left + 2, bottom - top + 2, 0xFF000000);
+		graphics.renderOutline(left - 1, top - 1, right - left + 2, bottom - top + 2, 0xFF000000);
 
 		for (int tick : TICKS) {
 			int x = fovToX(tick);
 			graphics.fill(x, bottom + 1, x + 1, bottom + 4, 0xFFB0B4BA);
 			String label = tick + "°";
 			int labelX = Mth.clamp(x - font.width(label) / 2, getX() + 2, getRight() - 2 - font.width(label));
-			graphics.text(font, label, labelX, bottom + 6, 0xFFB0B4BA, false);
+			graphics.drawString(font, label, labelX, bottom + 6, 0xFFB0B4BA, false);
 		}
 
 		Minecraft client = Minecraft.getInstance();
@@ -242,7 +254,7 @@ public final class Fov360ThresholdWidget extends AbstractWidget {
 				}
 			}
 			Component currentLabel = Component.translatable("fov360.thresholds.current", Math.round(current));
-			graphics.text(font, currentLabel, getRight() - PADDING - font.width(currentLabel), getY() + 4, 0xFFFFFFFF, false);
+			graphics.drawString(font, currentLabel, getRight() - PADDING - font.width(currentLabel), getY() + 4, 0xFFFFFFFF, false);
 		}
 
 		int hovered = isHovered() ? pointAt(mouseX, mouseY) : -1;
@@ -257,16 +269,16 @@ public final class Fov360ThresholdWidget extends AbstractWidget {
 		}
 
 		Fov360Config.ProjectionPoint selectedPoint = selectedPoint();
-		graphics.text(font, Component.translatable("fov360.thresholds.selected", selectedPoint.fov, selectedPoint.projection.displayName()),
+		graphics.drawString(font, Component.translatable("fov360.thresholds.selected", selectedPoint.fov, selectedPoint.projection.displayName()),
 			getX() + PADDING, getY() + 4, 0xFFFFFFFF, false);
 
 		if (dragging) {
 			return;
 		}
 		if (hovered >= 0) {
-			graphics.setComponentTooltipForNextFrame(font, pointTooltip(hovered), mouseX, mouseY);
+			graphics.renderComponentTooltip(font, pointTooltip(hovered), mouseX, mouseY);
 		} else if (isHovered() && overTrack(mouseX, mouseY)) {
-			graphics.setComponentTooltipForNextFrame(font, trackTooltip(xToFov(mouseX)), mouseX, mouseY);
+			graphics.renderComponentTooltip(font, trackTooltip(xToFov(mouseX)), mouseX, mouseY);
 		}
 	}
 

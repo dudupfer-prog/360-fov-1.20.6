@@ -1,5 +1,5 @@
 #version 330
-#extension GL_ARB_separate_shader_objects : require
+#extension GL_ARB_separate_shader_objects : enable
 
 #define M_PI 3.14159265
 

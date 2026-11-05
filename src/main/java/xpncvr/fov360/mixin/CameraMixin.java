@@ -1,16 +1,13 @@
 package xpncvr.fov360.mixin;
 
-import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.Camera;
-import net.minecraft.client.DeltaTracker;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.culling.Frustum;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.material.FogType;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
-import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -38,36 +35,19 @@ public abstract class CameraMixin {
 	private boolean panini$applyingCaptureRotation = false;
 
 	@Shadow
-	private Frustum cullFrustum;
-
-	@Shadow
-	private float fov;
-
-	@Shadow
-	private boolean isPanoramicMode;
-
-	@Shadow
-	private float depthFar;
-
-	@Shadow
 	protected abstract void setRotation(float yRot, float xRot);
 
 	@Shadow
 	protected abstract void setPosition(Vec3 position);
 
-	@Shadow
-	private void setupPerspective(float zNear, float zFar, float fov, float width, float height) {
-		throw new AssertionError();
-	}
-
-	@Inject(method = "update", at = @At("TAIL"))
-	private void panini$overrideCaptureView(DeltaTracker deltaTracker, CallbackInfo ci) {
+	@Inject(method = "setup", at = @At("TAIL"))
+	private void panini$overrideCaptureView(BlockGetter level, Entity entity, boolean detached, boolean thirdPersonReverse, float partialTick, CallbackInfo ci) {
 		if (!Fov360Renderer.capturing) {
 			return;
 		}
 		Camera self = (Camera) (Object) this;
-		if (self.isDetached()) {
-			panini$keepOffWall(self, self.getCameraEntityPartialTicks(deltaTracker));
+		if (detached) {
+			panini$keepOffWall(self, partialTick);
 		}
 		this.panini$applyingCaptureRotation = true;
 		try {
@@ -75,38 +55,19 @@ public abstract class CameraMixin {
 		} finally {
 			this.panini$applyingCaptureRotation = false;
 		}
-
-		Matrix4f viewRotation = self.getViewRotationMatrix(new Matrix4f());
-		Matrix4f cullProjection = new Matrix4f().perspective(
-			Fov360Renderer.captureCullFov * (float) (Math.PI / 180.0),
-			Fov360Renderer.captureAspect,
-			Camera.PROJECTION_Z_NEAR,
-			this.depthFar,
-			RenderSystem.getDevice().getDeviceInfo().isZZeroToOne());
-		Frustum frustum = new Frustum(viewRotation, cullProjection);
-		Vec3 pos = self.position();
-		frustum.prepare(pos.x(), pos.y(), pos.z());
-		this.cullFrustum = frustum;
-
-		this.setupPerspective(
-			panini$captureNear(),
-			this.depthFar,
-			Fov360Renderer.captureFov,
-			Fov360Renderer.captureAspect,
-			1.0F);
 	}
 
 	@Unique
 	private void panini$keepOffWall(Camera self, float partialTicks) {
-		Vec3 pos = self.position();
-		Vec3 forward = new Vec3(self.forwardVector());
-		Vec3 eye = self.entity().getEyePosition(partialTicks);
-		BlockHitResult hit = self.entity().level().clip(new ClipContext(
+		Vec3 pos = self.getPosition();
+		Vec3 forward = new Vec3(self.getLookVector());
+		Vec3 eye = self.getEntity().getEyePosition(partialTicks);
+		BlockHitResult hit = self.getEntity().level().clip(new ClipContext(
 			pos,
 			pos.subtract(forward.scale(CAPTURE_WALL_MARGIN)),
 			ClipContext.Block.VISUAL,
 			ClipContext.Fluid.NONE,
-			self.entity()));
+			self.getEntity()));
 		double clearance = hit.getType() == HitResult.Type.MISS ? CAPTURE_WALL_MARGIN : hit.getLocation().distanceTo(pos);
 		double push = Math.min(CAPTURE_WALL_MARGIN - clearance, pos.distanceTo(eye));
 		if (push > 0.0) {
@@ -114,12 +75,11 @@ public abstract class CameraMixin {
 		}
 	}
 
-	@Unique
-	private static float panini$captureNear() {
+	public static float panini$captureNear() {
 		float tanY = (float) Math.tan(Fov360Renderer.captureFov * (Math.PI / 360.0));
 		float tanX = tanY * Fov360Renderer.captureAspect;
 		float cornerSq = 1.0F + tanX * tanX + tanY * tanY;
-		return Camera.PROJECTION_Z_NEAR * (float) Math.sqrt(Math.min(1.0F, CUBE_CORNER_NEAR_DISTANCE_SQ / cornerSq));
+		return 0.05F * (float) Math.sqrt(Math.min(1.0F, CUBE_CORNER_NEAR_DISTANCE_SQ / cornerSq));
 	}
 
 	@Redirect(
@@ -130,32 +90,6 @@ public abstract class CameraMixin {
 			return rotation.set(Fov360Renderer.captureRotation);
 		}
 		return rotation.rotationYXZ(yaw, pitch, roll);
-	}
-
-	@Inject(method = "createProjectionMatrixForCulling", at = @At("HEAD"), cancellable = true)
-	private void panini$clampCullingFov(CallbackInfoReturnable<Matrix4f> cir) {
-		Minecraft client = Minecraft.getInstance();
-		float requested = Math.max(this.fov, client.options.fov().get());
-		if (requested <= PANINI_MAX_VANILLA_FOV) {
-			return;
-		}
-		cir.setReturnValue(new Matrix4f().perspective(
-			PANINI_MAX_VANILLA_FOV * (float) (Math.PI / 180.0),
-			(float) client.getWindow().getWidth() / client.getWindow().getHeight(),
-			Camera.PROJECTION_Z_NEAR,
-			this.depthFar,
-			RenderSystem.getDevice().getDeviceInfo().isZZeroToOne()));
-	}
-
-	@Inject(method = "calculateFov", at = @At("RETURN"), cancellable = true)
-	private void panini$matchRectilinearFov(float partialTicks, CallbackInfoReturnable<Float> cir) {
-		if (this.isPanoramicMode || Fov360Renderer.capturing) {
-			return;
-		}
-		float scale = Fov360Renderer.vanillaFovScale(Minecraft.getInstance());
-		if (scale != 1.0F) {
-			cir.setReturnValue(cir.getReturnValueF() * scale);
-		}
 	}
 
 	@Inject(method = "getFluidInCamera", at = @At("HEAD"), cancellable = true)

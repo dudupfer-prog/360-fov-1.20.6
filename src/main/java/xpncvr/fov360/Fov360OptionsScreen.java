@@ -80,13 +80,13 @@ public final class Fov360OptionsScreen extends OptionsSubScreen {
 				config.rearOverlay,
 				value -> config.rearOverlay = value).createButton(options),
 			Button.builder(Component.translatable("fov360.options.editRearView"),
-				button -> minecraft.gui.setScreen(new Fov360RearViewScreen(this)))
+				button -> minecraft.setScreen(new Fov360RearViewScreen(this)))
 			.tooltip(Tooltip.create(Component.translatable("fov360.options.editRearView.tooltip")))
 			.build());
 
 		list.addHeader(Component.translatable("fov360.options.projections"));
 		list.addBig(Button.builder(Component.translatable("fov360.options.editThresholds"),
-				button -> minecraft.gui.setScreen(new Fov360ProjectionScreen(this)))
+				button -> minecraft.setScreen(new Fov360ProjectionScreen(this)))
 			.tooltip(Tooltip.create(Component.translatable("fov360.options.editThresholds.tooltip")))
 			.build());
 	}
@@ -102,12 +102,12 @@ public final class Fov360OptionsScreen extends OptionsSubScreen {
 	}
 
 	private void confirmReset() {
-		minecraft.gui.setScreen(new ConfirmScreen(confirmed -> {
+		minecraft.setScreen(new ConfirmScreen(confirmed -> {
 			if (confirmed) {
 				config.copyFrom(new Fov360Config());
-				minecraft.gui.setScreen(new Fov360OptionsScreen(lastScreen, options));
+				minecraft.setScreen(new Fov360OptionsScreen(lastScreen, options));
 			} else {
-				minecraft.gui.setScreen(this);
+				minecraft.setScreen(this);
 			}
 		}, Component.translatable("fov360.options.reset.confirm"), Component.translatable("fov360.reset.warning")));
 	}

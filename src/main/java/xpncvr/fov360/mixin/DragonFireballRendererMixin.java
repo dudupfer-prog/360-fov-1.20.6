@@ -1,11 +1,11 @@
 package xpncvr.fov360.mixin;
 
 import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.entity.DragonFireballRenderer;
-import net.minecraft.client.renderer.entity.state.EntityRenderState;
-import net.minecraft.client.renderer.state.level.CameraRenderState;
+import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
+import net.minecraft.world.entity.projectile.DragonFireball;
 import org.joml.Quaternionf;
-import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
@@ -15,12 +15,11 @@ import xpncvr.fov360.Fov360Renderer;
 public abstract class DragonFireballRendererMixin {
 
 	@Redirect(
-		method = "submit(Lnet/minecraft/client/renderer/entity/state/EntityRenderState;Lcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/SubmitNodeCollector;Lnet/minecraft/client/renderer/state/level/CameraRenderState;)V",
+		method = "render(Lnet/minecraft/world/entity/projectile/DragonFireball;FFLcom/mojang/blaze3d/vertex/PoseStack;Lnet/minecraft/client/renderer/MultiBufferSource;I)V",
 		at = @At(
-			value = "FIELD",
-			opcode = Opcodes.GETFIELD,
-			target = "Lnet/minecraft/client/renderer/state/level/CameraRenderState;orientation:Lorg/joml/Quaternionf;"))
-	private Quaternionf panini$dragonFireballTowardEye(CameraRenderState cameraState, EntityRenderState state, PoseStack poseStack) {
-		return Fov360Renderer.billboardOrientation(poseStack, cameraState.orientation, false);
+			value = "INVOKE",
+			target = "Lnet/minecraft/client/renderer/entity/EntityRenderDispatcher;cameraOrientation()Lorg/joml/Quaternionf;"))
+	private Quaternionf panini$dragonFireballTowardEye(EntityRenderDispatcher dispatcher, DragonFireball entity, float entityYaw, float partialTicks, PoseStack poseStack, MultiBufferSource buffer, int packedLight) {
+		return Fov360Renderer.billboardOrientation(poseStack, dispatcher.cameraOrientation(), false);
 	}
 }

@@ -1,5 +1,6 @@
 package xpncvr.fov360.mixin;
 
+import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.Camera;
 import net.minecraft.client.particle.SingleQuadParticle;
 import net.minecraft.util.Mth;
@@ -14,7 +15,7 @@ import xpncvr.fov360.Fov360Renderer;
 public abstract class SingleQuadParticleMixin {
 
 	@Redirect(
-		method = "extract(Lnet/minecraft/client/renderer/state/level/QuadParticleRenderState;Lnet/minecraft/client/Camera;F)V",
+		method = "render(Lcom/mojang/blaze3d/vertex/VertexConsumer;Lnet/minecraft/client/Camera;F)V",
 		at = @At(
 			value = "INVOKE",
 			target = "Lnet/minecraft/client/particle/SingleQuadParticle$FacingCameraMode;setRotation(Lorg/joml/Quaternionf;Lnet/minecraft/client/Camera;F)V"))
@@ -23,7 +24,7 @@ public abstract class SingleQuadParticleMixin {
 			&& (mode == SingleQuadParticle.FacingCameraMode.LOOKAT_XYZ || mode == SingleQuadParticle.FacingCameraMode.LOOKAT_Y);
 		if (standard) {
 			ParticleAccessor self = (ParticleAccessor) this;
-			Vec3 eye = camera.position();
+			Vec3 eye = camera.getPosition();
 			double px = Mth.lerp((double) partialTickTime, self.panini$getXOld(), self.panini$getX());
 			double py = Mth.lerp((double) partialTickTime, self.panini$getYOld(), self.panini$getY());
 			double pz = Mth.lerp((double) partialTickTime, self.panini$getZOld(), self.panini$getZ());
